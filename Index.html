@@ -3116,10 +3116,11 @@ function importJSON() {
   input.click();
 }
 
-// Print Report Generator
+// Print Report Generator — Full PDF-friendly report
 function generatePrintReport() {
-  // Simplified print report to avoid template-literal parsing bugs that can break the whole app.
-  // For full detail, use Export JSON.
+  // Ensure compute has been run and data is available
+  try { compute(); } catch (e) { /* compute will call updateProjectCost etc */ }
+
   let snapshot;
   try {
     snapshot = calculateSnapshot();
@@ -3131,55 +3132,148 @@ function generatePrintReport() {
     alert('Cannot print yet: please click “Compute All” first.');
     return;
   }
-  const safe = (v) => (v === undefined || v === null) ? '' : String(v);
-  const rows = [
-    ['City/Locale', safe($('#locale').value)],
-    ['Total Project Cost', money(+$('#projCost').value||0)],
-    ['Cash Down', money(+$('#cashInv').value||0)],
-    ['Monthly Gross Revenue', money(snapshot.grossRevenue||0)],
-    ['Monthly EBITDA/NOI', money(snapshot.ebitda||0)],
-    ['EBITDA Margin', ((snapshot.ebitdaMargin||0)*100).toFixed(1) + '%'],
-    ['Monthly Debt Service', money(snapshot.totalDebtService||0)],
-    ['DSCR (Base)', (snapshot.dscr||0).toFixed(2)],
-    ['Cash-on-Cash (Year 1)', (snapshot.cashOnCash||0).toFixed(1) + '%'],
-    ['Industry Valuation (60× monthly NOI)', money(snapshot.industryValuation||0)],
-    ['Equipment Avg Age', (snapshot.ageRisk?.avgAge ?? 0).toFixed(1) + ' yrs'],
-    ['Equipment Oldest', (snapshot.ageRisk?.oldest ?? 0).toFixed(0) + ' yrs'],
-  ];
 
+  // Gather simulation and sections
+  const simulation = simulateYears();
+  const accountantText = (document.getElementById('accountantText') || {}).innerHTML || '';
+  const committee = {
+    acct: (document.getElementById('acctFinal') || {}).textContent || '',
+    lender: (document.getElementById('lenderOpinion') || {}).textContent || '',
+    inst: (document.getElementById('instOpinion') || {}).textContent || ''
+  };
+
+  // Capture charts (convert canvases to images where possible)
+  const chartImgs = [];
+  try {
+    const canvases = Array.from(document.querySelectorAll('canvas'));
+    canvases.forEach((c, i) => {
+      try {
+        const data = c.toDataURL('image/png');
+        chartImgs.push({ title: c.id || `chart${i+1}`, src: data });
+      } catch (err) {
+        // Skip tainted canvas
+      }
+    });
+  } catch (e) { /* ignore */ }
+
+  // Build full inputs snapshot (key inputs + equipment tables)
+  function getInputsHtml() {
+    const inputs = [];
+    const add = (k, v) => inputs.push([k, v]);
+    add('Locale', $('#locale')?.value || '');
+    add('City/ZIP', `${$('#autoCity')?.value||''} ${$('#autoState')?.value||''} ${$('#autoZip')?.value||''}`);
+    add('Total Project Cost', money(+$('#projCost')?.value||0));
+    add('Cash Down', money(+$('#cashInv')?.value||0));
+    add('Days open / mo', +$('#days')?.value||30);
+    add('Wash & Fold $/lb', money(+$('#wfoldPrice')?.value||0));
+    add('Vending (gross / mo)', money(+$('#vendRev')?.value||0));
+    add('Electric $/kWh', +$('#rateElec')?.value || 0);
+    add('Gas $/therm', +$('#rateGas')?.value || 0);
+    add('Water $/gal', +$('#rateWater')?.value || 0);
+    // Equipment lists
+    let equipHtml = '<table><thead><tr><th>Type</th><th>Count</th><th>Vend/$</th><th>Turns/Day</th><th>Min</th><th>kWh</th><th>Therms</th><th>Gals</th><th>Age</th></tr></thead><tbody>';
+    washerDefs.forEach(w => {
+      equipHtml += `<tr><td>${w.name}</td><td>${w.count}</td><td>${w.vend ?? '-'}</td><td>${w.turns ?? '-'}</td><td>${w.mins ?? '-'}</td><td>${w.kwh ?? '-'}</td><td>${w.therms ?? '-'}</td><td>${w.gals ?? '-'}</td><td>${w.age ?? '-'}</td></tr>`;
+    });
+    equipHtml += '</tbody></table><br/>';
+    equipHtml += '<table><thead><tr><th>Dryer</th><th>Count</th><th>$/Min</th><th>Avg Min</th><th>Cycles/Day</th><th>kWh</th><th>Therms</th><th>Age</th></tr></thead><tbody>';
+    dryerDefs.forEach(d => {
+      equipHtml += `<tr><td>${d.name}</td><td>${d.count}</td><td>${d.pricePerMin ?? '-'}</td><td>${d.avgMins ?? '-'}</td><td>${d.cycles ?? '-'}</td><td>${d.kwh ?? '-'}</td><td>${d.therms ?? '-'}</td><td>${d.age ?? '-'}</td></tr>`;
+    });
+    equipHtml += '</tbody></table>';
+
+    const inputsHtml = `<div><h3>Key Inputs</h3><table>${inputs.map(r=>`<tr><td style="font-weight:700">${r[0]}</td><td>${r[1]}</td></tr>`).join('')}</table><h3 style="margin-top:12px">Equipment</h3>${equipHtml}</div>`;
+    return inputsHtml;
+  }
+
+  // Build P&L and KPIs (monthly and annual)
+  function getPnlHtml() {
+    const monthly = `
+      <table>
+        <tr><td style="font-weight:700">Metric</td><td>Monthly</td><td>Annual</td></tr>
+        <tr><td style="font-weight:700">Gross Revenue</td><td>${money(snapshot.grossRevenue)}</td><td>${money(snapshot.grossRevenue*12)}</td></tr>
+        <tr><td style="font-weight:700">EBITDA</td><td>${money(snapshot.ebitda)}</td><td>${money(snapshot.ebitda*12)}</td></tr>
+        <tr><td style="font-weight:700">Monthly Cash Flow</td><td>${money(snapshot.cashFlow)}</td><td>${money((snapshot.cashFlow||0)*12)}</td></tr>
+        <tr><td style="font-weight:700">Total Debt Service (annual)</td><td colspan="2">${money(snapshot.totalDebtService)}</td></tr>
+      </table>`;
+    return `<div><h3>P&L Summary</h3>${monthly}</div>`;
+  }
+
+  // Multi-year projections table
+  function getProjectionHtml() {
+    const years = simulation.years || [];
+    let html = `<div style="page-break-inside:avoid"><h3>10-Year Projections</h3><table><tr><td style="font-weight:700">Year</td><td>Revenue</td><td>EBITDA</td><td>Cash Flow</td><td>DSCR</td></tr>`;
+    years.slice(0,10).forEach((y, idx) => {
+      html += `<tr><td>${idx+1}</td><td>${money(y.revenue)}</td><td>${money(y.ebitda)}</td><td>${money(y.cashFlow)}</td><td>${(y.dscr||0).toFixed(2)}</td></tr>`;
+    });
+    html += '</table></div>';
+    return html;
+  }
+
+  // Committee verdict / accountant text (already HTML)
   const now = new Date();
-  const reportHtml = `<!doctype html><html><head><meta charset="utf-8" />
-    <title>Laundromat Investment Summary</title>
-    <style>
-      body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:24px;color:#111;}
-      h1{margin:0 0 6px 0;font-size:18px;}
-      .meta{color:#555;margin-bottom:16px;font-size:12px;}
-      table{border-collapse:collapse;width:100%;font-size:12px;}
-      td{border:1px solid #ddd;padding:8px;vertical-align:top;}
-      td:first-child{width:42%;color:#333;background:#fafafa;font-weight:600;}
-      .note{margin-top:14px;font-size:11px;color:#555;}
-      @media print { .no-print{display:none;} }
-    </style>
-  </head><body>
-    <h1>Laundromat Investment Summary</h1>
-    <div class="meta">Generated ${now.toLocaleString()} • Market Mode: ${safe($('#marketMode').value || '')}</div>
-    <table>
-      ${rows.map(r=>`<tr><td>${r[0]}</td><td>${r[1]}</td></tr>`).join('')}
-    </table>
-    <div class="note">This summary is intentionally concise to keep printing reliable. Use Export JSON for full inputs.</div>
-    <div class="no-print" style="margin-top:16px;"><button onclick="window.print()">Print</button></div>
+
+  const css = `
+    body{font-family:Arial,Helvetica,sans-serif;color:#111;margin:20px}
+    h1{font-size:20px;margin-bottom:6px}
+    h2{font-size:16px;margin-top:18px}
+    table{border-collapse:collapse;width:100%;margin-top:6px}
+    td,th{border:1px solid #ddd;padding:8px;vertical-align:top}
+    th{background:#f4f4f4;text-align:left}
+    .section{margin-top:12px}
+    img.chart{max-width:100%;height:auto;border:1px solid #ddd;padding:6px;background:white}
+    @media print { @page { size: A4; margin: 12mm } .no-print{display:none} .page-break{page-break-before:always} }
+  `;
+
+  const report = `<!doctype html><html><head><meta charset="utf-8"><title>Full Laundromat Report</title><style>${css}</style></head><body>
+    <div style="display:flex;justify-content:space-between;align-items:center"><div><h1>Laundromat Investment Report</h1><div>Generated ${now.toLocaleString()}</div></div><div class="no-print"><button onclick="window.print()">Print / Save as PDF</button></div></div>
+
+    <div class="section">${getInputsHtml()}</div>
+    <div class="section">${getPnlHtml()}</div>
+    <div class="section">${getProjectionHtml()}</div>
+    <div class="section"><h3>KPIs & Valuation</h3>
+      <table>
+        <tr><td style="font-weight:700">Cash-on-Cash (Year 1)</td><td>${(snapshot.cashOnCash||0).toFixed(1)}%</td></tr>
+        <tr><td style="font-weight:700">DSCR (Base)</td><td>${(snapshot.dscr||0).toFixed(2)}</td></tr>
+        <tr><td style="font-weight:700">Industry Valuation (60× NOI)</td><td>${money(snapshot.industryValuation)}</td></tr>
+      </table>
+    </div>
+
+    <div class="section"><h3>Charts</h3>${chartImgs.map(c=>`<div style="margin-top:8px"><strong>${c.title}</strong><div><img class="chart" src="${c.src}" alt="${c.title}"></div></div>`).join('')}
+    </div>
+
+    <div class="section page-break"><h3>Committee Synthesis</h3>
+      <div><strong>Mr. Accountant</strong><div style="white-space:pre-wrap;border:1px solid #eee;padding:8px;margin-top:6px;background:#fafafa">${accountantText}</div></div>
+      <div style="margin-top:12px"><strong>Mr. Lender</strong><div style="white-space:pre-wrap;border:1px solid #eee;padding:8px;margin-top:6px;background:#fafafa">${committee.lender}</div></div>
+      <div style="margin-top:12px"><strong>Institutional Buyer</strong><div style="white-space:pre-wrap;border:1px solid #eee;padding:8px;margin-top:6px;background:#fafafa">${committee.inst}</div></div>
+    </div>
+
+    <div class="section"><small>Notes: This report is generated for preliminary underwriting and should be supplemented with seller P&L, utility bills, and equipment inspection before final underwriting. Use the Print dialog to "Save as PDF" for a portable PDF file acceptable to lenders.</small></div>
   </body></html>`;
 
-  const w = window.open('', '_blank', 'noopener,noreferrer,width=920,height=780,scrollbars=yes');
+  // Open report in new window/tab with fallback to iframe print if popup is blocked
+  const w = window.open('', '_blank', 'noopener,noreferrer,width=1000,height=900,scrollbars=yes');
   if (!w) {
-    alert('Popup blocked. Please allow popups for this site, then try again.');
+    // Popup blocked: write to a hidden iframe in current window and print from it
+    let ifr = document.getElementById('_print_iframe');
+    if (!ifr) {
+      ifr = document.createElement('iframe');
+      ifr.style.position = 'fixed'; ifr.style.right = '0'; ifr.style.bottom = '0'; ifr.style.width='0'; ifr.style.height='0'; ifr.style.border='0'; ifr.id = '_print_iframe';
+      document.body.appendChild(ifr);
+    }
+    const idoc = ifr.contentWindow.document;
+    idoc.open(); idoc.write(report); idoc.close();
+    setTimeout(()=>{ try { ifr.contentWindow.focus(); ifr.contentWindow.print(); } catch(e){ alert('Popup blocked and automatic printing failed. Please right-click the Print button and open in new tab.'); } }, 500);
     return;
   }
-  w.document.open();
-  w.document.write(reportHtml);
-  w.document.close();
-  setTimeout(() => { try { w.focus(); } catch(e){} }, 300);
+
+  w.document.open(); w.document.write(report); w.document.close();
+  // try to auto-print and focus
+  setTimeout(()=>{
+    try { w.focus(); w.print(); } catch(e) { /* ignore */ }
+  }, 600);
 }
+
 
 // ================================
 // STRESS TEST FUNCTIONS
