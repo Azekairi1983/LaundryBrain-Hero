@@ -4351,7 +4351,8 @@ function buildAccountantSynthesis(hz, snapshot, simulation) {
   const coc = snapshot.cashOnCash ?? 0;
   const baseDSCR = snapshot.dscr ?? 0;
 
-  lines.push(`Operating view: EBITDA ${money0(snapshot.ebitda)} (${(margin*100).toFixed(1)}% margin), Cash-on-cash ${(coc*100).toFixed(1)}%, Base DSCR ${baseDSCR.toFixed(2)}.`);
+  // snapshot.cashOnCash is already a percentage (e.g., 66.65), so format directly without multiplying by 100
+  lines.push(`Operating view: EBITDA ${money0(snapshot.ebitda)} (${(margin*100).toFixed(1)}% margin), Cash-on-cash ${coc.toFixed(1)}%, Base DSCR ${baseDSCR.toFixed(2)}.`);
 
   // Consider Lender + Institutional
   const lenderReject = hz.dealKillers?.some(x => x.toLowerCase().includes("lease term") || x.toLowerCase().includes("dscr") || x.toLowerCase().includes("capex shock"));
