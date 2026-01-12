@@ -3142,19 +3142,51 @@ function generatePrintReport() {
     inst: (document.getElementById('instOpinion') || {}).textContent || ''
   };
 
-  // Capture charts (convert canvases to images where possible)
+  // Capture charts (prefer Chart.js instances, then canvases; include placeholders when unavailable)
   const chartImgs = [];
   try {
-    const canvases = Array.from(document.querySelectorAll('canvas'));
-    canvases.forEach((c, i) => {
-      try {
-        const data = c.toDataURL('image/png');
-        chartImgs.push({ title: c.id || `chart${i+1}`, src: data });
-      } catch (err) {
-        // Skip tainted canvas
-      }
-    });
+    // Give charts a chance to re-render
+    try { Object.values(window.chartInstances || {}).forEach(ch => { try { ch.update(); } catch(e){} }); } catch(e){}
+
+    // Prefer Chart.js instances (toBase64Image)
+    if (window.chartInstances && typeof window.chartInstances === 'object') {
+      Object.keys(window.chartInstances).forEach(key => {
+        const ch = window.chartInstances[key];
+        try {
+          if (ch && typeof ch.toBase64Image === 'function') {
+            chartImgs.push({ title: ch.canvas?.id || key, src: ch.toBase64Image() });
+          } else if (ch && ch.canvas && ch.canvas.toDataURL) {
+            chartImgs.push({ title: ch.canvas.id || key, src: ch.canvas.toDataURL('image/png') });
+          }
+        } catch (e) {
+          chartImgs.push({ title: ch && ch.canvas && ch.canvas.id ? ch.canvas.id : key, src: null, note: 'Chart image unavailable (cross-origin resources)' });
+        }
+      });
+    }
+
+    // If nothing captured, try raw canvases in DOM
+    if (chartImgs.length === 0) {
+      const canvases = Array.from(document.querySelectorAll('canvas'));
+      canvases.forEach((c, i) => {
+        try {
+          chartImgs.push({ title: c.id || `chart${i+1}`, src: c.toDataURL('image/png') });
+        } catch (err) {
+          chartImgs.push({ title: c.id || `chart${i+1}`, src: null, note: 'Chart image unavailable (cross-origin resources)' });
+        }
+      });
+    }
   } catch (e) { /* ignore */ }
+
+  // Capture stress test HTML and Monte Carlo results if present
+  const stressHtml = (document.getElementById('stressResults') || {}).innerHTML || '';
+  const mcEl = document.getElementById('monteCarloResults');
+  let mcHtml = '';
+  if (mcEl && mcEl.innerHTML && mcEl.innerHTML.trim()) {
+    mcHtml = mcEl.innerHTML;
+  } else if (window.monteCarloResults && window.monteCarloResults.results) {
+    const s = window.monteCarloResults.results;
+    mcHtml = `<div><strong>Monte Carlo Summary</strong><br>Mean ROI: ${(s.meanROI||0).toFixed(1)}% — Median: ${(s.medianROI||0).toFixed(1)}% — 5th: ${(s.p05||0).toFixed(1)}% — 95th: ${(s.p95||0).toFixed(1)}% — Positive NPV: ${(s.positiveNPVPct||0).toFixed(1)}%</div>`;
+  }
 
   // Build full inputs snapshot (key inputs + equipment tables)
   function getInputsHtml() {
@@ -3239,7 +3271,19 @@ function generatePrintReport() {
       </table>
     </div>
 
-    <div class="section"><h3>Charts</h3>${chartImgs.map(c=>`<div style="margin-top:8px"><strong>${c.title}</strong><div><img class="chart" src="${c.src}" alt="${c.title}"></div></div>`).join('')}
+    <div class="section"><h3>Charts</h3>
+      ${chartImgs.length ? chartImgs.map(c=>{
+        if (c && c.src) return `<div style="margin-top:8px"><strong>${c.title}</strong><div><img class="chart" src="${c.src}" alt="${c.title}"></div></div>`;
+        return `<div style="margin-top:8px"><strong>${c.title}</strong><div style="padding:8px;border:1px solid #eee;background:#fff;color:#333">${c.note || 'Chart image not available. Please run charts and allow cross-origin resources or use Export JSON.'}</div></div>`;
+      }).join('') : '<div style="color:#666">No charts available to embed. Please ensure charts are rendered, then re-run Report.</div>'}
+    </div>
+
+    <div class="section"><h3>Stress Test Results</h3>
+      ${stressHtml ? `<div style="border:1px solid #eee;padding:8px;background:#fafafa">${stressHtml}</div>` : '<div style="color:#666">No stress test run. Use the Stress Tests panel to run scenarios.</div>'}
+    </div>
+
+    <div class="section"><h3>Monte Carlo Summary</h3>
+      ${mcHtml ? `<div style="border:1px solid #eee;padding:8px;background:#fafafa">${mcHtml}</div>` : '<div style="color:#666">No Monte Carlo results. Run Monte Carlo analysis to include detailed probabilistic risk assessment in the report.</div>'}
     </div>
 
     <div class="section page-break"><h3>Committee Synthesis</h3>
