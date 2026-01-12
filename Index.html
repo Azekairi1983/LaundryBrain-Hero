@@ -4158,50 +4158,152 @@ function optimizeDownPayment() {
   $("#optimizationResults").innerHTML = results;
 }
 
-// Negotiation points analysis
+// Negotiation points analysis — comprehensive and actionable negotiation playbook
 function analyzeNegotiationPoints() {
   const snapshot = calculateSnapshot();
   const projCost = +$("#projCost").value;
-  
-  let points = [];
-  
-  // Price negotiation based on industry valuation
-  const chuckPostValue = snapshot.ebitda * 12 * 5; // 60x monthly NOI
-  if (projCost > chuckPostValue * 1.1) {
-    points.push(`💰 <strong>Price too high:</strong> Asking ${money(projCost)} vs industry value ${money(chuckPostValue)} (${(((projCost/chuckPostValue-1)*100)).toFixed(1)}% premium)`);
+  const resultsList = [];
+
+  // Helper to push a structured point
+  function pushPoint(code, title, summary, actions) {
+    resultsList.push({ code, title, summary, actions });
   }
-  
-  // Seller financing opportunity
+
+  // 1) Price vs valuation
+  const industryVal = snapshot.ebitda * 12 * 5; // 60x monthly NOI
+  if (projCost > industryVal * 1.05) {
+    pushPoint('price', 'Price vs Industry Valuation',
+      `Asking ${money(projCost)} vs industry fair value ${money(industryVal)} (${(((projCost/industryVal-1)*100)).toFixed(1)}% premium).`,
+      [`Ask for ${((projCost/industryVal-1)*100).toFixed(1)}% discount to align with 60× NOI benchmark`, `Request supporting P&L/utility bills and explain valuation gap using EBITDA multiple`] );
+  }
+
+  // 2) Financing structure: seller note, mezz, and down payment
   if (snapshot.dscr < 1.5 && (+$("#bPct").value) < 40) {
-    points.push(`🏦 <strong>Seller financing:</strong> Increase seller note to 40-50% to improve DSCR and reduce cash needed`);
+    pushPoint('sellerFinance', 'Seller Financing Opportunity',
+      `Current stressed DSCR (${snapshot.dscr.toFixed(2)}) is below conservative target for bankability.`,
+      [`Propose increasing seller note to 30–50% or a mezz tranche with deferrable interest`, `Ask seller to fund retool/escrow so proceeds are not added to financed amount`] );
   }
-  
-  // Equipment condition leverage
-  const avgAge = [...washerDefs, ...dryerDefs].reduce((sum, eq) => sum + eq.age * eq.count, 0) / 
-                 [...washerDefs, ...dryerDefs].reduce((sum, eq) => sum + eq.count, 0);
+
+  // 3) Equipment condition and replacement reserve
+  const totalUnits = [...washerDefs, ...dryerDefs].reduce((s,eq)=> s + (eq.count||0), 0) || 1;
+  const avgAge = ([...washerDefs, ...dryerDefs].reduce((sum, eq) => sum + (eq.age||0) * (eq.count||0), 0) / totalUnits) || 0;
   if (avgAge > 6) {
-    points.push(`🔧 <strong>Equipment depreciation:</strong> Average age ${avgAge.toFixed(1)} years - negotiate $${((avgAge - 5) * 5000).toFixed(0)} credit for equipment replacement`);
+    const suggestedCredit = Math.round((avgAge - 5) * 5000);
+    pushPoint('equipment', 'Equipment Condition & Replacement Reserve',
+      `Average equipment age ${avgAge.toFixed(1)} yrs; older equipment increases downtime and capex risk.`,
+      [`Negotiate a ${money(suggestedCredit)} credit or escrow for modernization`, `Request maintenance logs, service contracts, and equipment serials to get quotes`] );
   }
-  
-  // Lease terms
-  const rentBurden = snapshot.rent / snapshot.grossRevenue;
+
+  // 4) Lease economics and term
+  const rentBurden = snapshot.rent / Math.max(1, snapshot.grossRevenue);
+  const leaseYears = (+$("#leaseYears").value || 0);
+  const loanTerm = (+$("#aTerm").value || 20);
   if (rentBurden > 0.25) {
-    points.push(`🏢 <strong>High rent burden:</strong> ${(rentBurden*100).toFixed(1)}% of revenue - negotiate rent reduction or longer lease terms`);
+    pushPoint('rent', 'Rent Burden & Lease Terms',
+      `Rent is ${Math.round(rentBurden*100)}% of gross revenue (high).`,
+      [`Negotiate rent reduction or step-down/percentage rent`, `Seek lease extension or fixed CPI caps; ask for landlord contributions to buildout or tenant improvement allowance`] );
   }
-  
-  // Due diligence findings
-  if (snapshot.cashOnCash < 20) {
-    points.push(`📊 <strong>Below target ROI:</strong> ${snapshot.cashOnCash.toFixed(1)}% vs 20% target - justify lower price or better terms`);
+  if (leaseYears < loanTerm) {
+    pushPoint('leaseTerm', 'Lease Tenor vs Loan Term',
+      `Lease remaining (${leaseYears}y) is shorter than loan term (${loanTerm}y), adding refinancing/exit risk.`,
+      [`Request lease extension or assignment rights to cover loan term`, `Condition purchase on landlord’s written extension/guarantee`] );
   }
-  
-  const results = `
-    <h4>Negotiation Leverage Points</h4>
-    <div style="font-size:12px; color:#a8c5e9;">
-      ${points.length > 0 ? points.map(point => `• ${point}`).join("<br>") : "✅ Deal appears fairly priced with standard terms"}
+
+  // 5) Utilities and operational forecasts
+  const utilShare = (snapshot.utilities.total / Math.max(1, snapshot.grossRevenue));
+  if (utilShare > 0.08) {
+    pushPoint('utilities', 'Utilities & Energy Efficiency',
+      `Utilities are ${Math.round(utilShare*100)}% of revenue — a material margin pressure.`,
+      [`Request 12 months of utility bills for verification`, `Negotiate seller-funded efficiency upgrades (LED, hot-water efficiency, wash cycles) or ask for a credit`] );
+  }
+
+  // 6) Revenue mix, stickiness, and growth levers
+  const wfoldPrice = +$("#wfoldPrice").value || 0;
+  const vendGross = +$("#vendRev").value || 0;
+  const stickinessScore = +$("#pricingPower").value + +$("#renterScore").value + +$("#locElastic").value; // crude proxy
+  if ((+$("#wfoldLbs").value||0) === 0) {
+    pushPoint('wf', 'Low Wash & Fold Volume',
+      `Wash & Fold is currently not contributing revenue but can materially increase yields.`,
+      [`Propose seller-funded marketing or customer transition incentives`, `Include wash & fold revenue targets in earnout or price holdback`] );
+  }
+  if (vendGross > 0 && (+$("#vendCogsPct").value||0) > 40) {
+    pushPoint('vending', 'Vending Margins',
+      `High vending COGS lowers gross vending margin.`,
+      [`Request detailed vending sales and supply invoices`, `Negotiate for pre-paid vending supplies or inventory at close`] );
+  }
+
+  // 7) Staffing, labor, and operating assumptions
+  const laborHrs = +$("#laborHrsDay").value || 0;
+  const wage = +$("#wage").value || 0;
+  if (laborHrs * wage * 30 > snapshot.laborCost * 1.2) {
+    pushPoint('labor', 'Labor Assumptions & Efficiency',
+      `Projected labor cost seems inconsistent with hours/wage inputs.`,
+      [`Request payroll records and timecards`, `Propose short-term management contract or training allowance to improve labor productivity`] );
+  }
+
+  // 8) Working capital & soft costs
+  if ((+$("#workingCap").value || 0) < snapshot.grossRevenue*0.05) {
+    pushPoint('workingCap', 'Working Capital Adequacy',
+      `Working capital appears tight relative to monthly revenue; may hamper operations during seasonality or shocks.`,
+      [`Request an increase in working capital at close or seller-funded reserve`, `Negotiate a 3–6 month operating reserve escrow`] );
+  }
+
+  // 9) Replacement Reserve & CapEx shock
+  if ((snapshot.replacementReserve||0) < ((snapshot.projCost||0)*0.005)) {
+    pushPoint('reserve', 'Replacement Reserve',
+      `Replacement reserve is small relative to asset base; capex shocks could strain cash flows.`,
+      [`Ask for a capped escrow for Yr1 retooling (e.g., $50–150k) or seller-funded holdback`, `Consider extending warranty/service agreement until a specific date`] );
+  }
+
+  // 10) Market and competition
+  const compCount = (+$("#compCount").value || 0);
+  if (compCount >= 3) {
+    pushPoint('competition', 'Local Competition & Market Fit',
+      `There are ${compCount} competitors in the trade area; this can pressure pricing and demand.`,
+      [`Request market share evidence (trade area revenue, walk-in counts)`, `Negotiate price/earnout tied to maintaining revenue levels; add a price adjustment if competition grows`] );
+  }
+
+  // 11) Risk-based asks from stress tests / Monte Carlo
+  if (window.monteCarloResults && window.monteCarloResults.results) {
+    const mc = window.monteCarloResults.results;
+    if ((mc.p05||0) < 0) {
+      pushPoint('montecarlo', 'Downside Risk (Monte Carlo)',
+        `5th percentile ROI is ${(mc.p05||0).toFixed(1)}% indicating material downside tail risk.`,
+        [`Negotiate an earnout or partial deferred payment tied to Year-1 revenue/EBITDA`, `Ask for a price reduction contingent on 12-month verified seller P&L`] );
+    }
+  }
+
+  // 12) Due diligence requests & contingencies
+  pushPoint('dueDiligence', 'Due Diligence & Closing Conditions',
+    `Validate financials, operations, and legal encumbrances before closing.`,
+    [`Request 12 months Seller P&L and 24 months utility bills`, `Require equipment service logs, title/search, environmental disclosures, and proof of no outstanding violations`, `Make price adjustments/credits contingent on DDU findings`] );
+
+  // 13) Prioritized Negotiation Playbook
+  const playbook = [];
+  // High priority: price, lease, equipment, seller-funded escrow
+  resultsList.sort((a,b) => (a.code === 'price' ? -1 : 0));
+  resultsList.forEach(pt => {
+    playbook.push(`• <strong>${pt.title}:</strong> ${pt.summary}<br>Actions:<ul style="margin:6px 0 8px 18px">${pt.actions.map(a=>`<li>${a}</li>`).join('')}</ul>`);
+  });
+
+  // Build HTML
+  const html = `
+    <h4>Negotiation Playbook & Concerns (Actionable Items)</h4>
+    <div style="font-size:13px; color:#a8c5e9">
+      ${playbook.join('<br>')}
+      <hr/>
+      <strong>Checklist before final offer</strong>
+      <ul>
+        <li>Obtain 12 months P&L and last 24 months utility bills</li>
+        <li>Get equipment quotes from 2 suppliers for modernization costs</li>
+        <li>Request lease extension/assignment letter from landlord matching loan term</li>
+        <li>Negotiate seller-funded escrow/holdback for retooling & working capital</li>
+        <li>Include price reduction / earnout tied to verified Year-1 EBITDA</li>
+      </ul>
     </div>
   `;
-  
-  $("#optimizationResults").innerHTML = results;
+
+  $("#optimizationResults").innerHTML = html;
 }
 
 // Financing comparison
