@@ -216,6 +216,7 @@ summary{cursor:pointer; color:#cfe0ff}
           <button onclick="sizeFootprintFromUnits()">Size Footprint</button>
           <button onclick="suggestUnits()">Suggest Machines</button>
           <button class="ghost" onclick="optimizeMix()">Optimize Mix</button>
+          <button class="ghost" onclick="resetEquipmentDefaults()">Restore defaults</button>
         </div>
       </div>
 
@@ -735,6 +736,11 @@ let equipCosts = {
   "Stack Dryer": 9000,
   "Single Dryer": 12000
 };
+
+// Keep a deep copy of factory defaults so we can restore them later
+window._initialWasherDefs = JSON.parse(JSON.stringify(washerDefs));
+window._initialDryerDefs = JSON.parse(JSON.stringify(dryerDefs));
+window._initialEquipCosts = JSON.parse(JSON.stringify(equipCosts));
 
 // Regional market presets with National City CA as default
 const localePresets = {
@@ -1830,6 +1836,19 @@ function sizeFootprintFromUnits() {
   document.getElementById("constraintNote").innerHTML = `Footprint sized for ${totalWashers + totalDryers} machines: ${finalSqft.toLocaleString()} sq ft + ${suggestedStalls} stalls (15% efficiency buffer included)`;
   
   deferredCompute();
+}
+
+
+
+function resetEquipmentDefaults() {
+  if (!confirm('Restore equipment to initial defaults? This will overwrite current equipment and counts. Proceed?')) return;
+  washerDefs = JSON.parse(JSON.stringify(window._initialWasherDefs || []));
+  dryerDefs = JSON.parse(JSON.stringify(window._initialDryerDefs || []));
+  equipCosts = JSON.parse(JSON.stringify(window._initialEquipCosts || {}));
+  populateEquipmentTables();
+  populateEquipmentCostTable();
+  compute();
+  alert('Equipment defaults restored.');
 }
 
 function suggestUnits() {
@@ -3027,29 +3046,59 @@ function importJSON() {
       reader.onload = function(e) {
         try {
           const data = JSON.parse(e.target.result);
-          
-          // Import data
-          washerDefs = data.washerDefs || washerDefs;
-          dryerDefs = data.dryerDefs || dryerDefs;
-          equipCosts = data.equipCosts || equipCosts;
-          
-          $("#locale").value = data.locale || 'national_city';
-          $("#horizon").value = data.horizon || 10;
-          $("#days").value = data.days || 30;
-          
-          if (data.rates) {
-            document.getElementById("rateElec").value = data.rates.elec || 0.32;
-            $("#rateGas").value = data.rates.gas || 1.80;
-            $("#rateWater").value = data.rates.water || 0.008;
+
+          // Prefer shared helper if present (also makes this testable in Node)
+          if (typeof applyImportedData === 'function') {
+            applyImportedData(data, { confirmFn: (msg) => confirm(msg) });
+
+            // sync simple fields into current DOM inputs
+            $("#locale").value = data.locale || 'national_city';
+            $("#horizon").value = data.horizon || 10;
+            $("#days").value = data.days || 30;
+            if (data.rates) {
+              document.getElementById("rateElec").value = data.rates.elec || 0.32;
+              $("#rateGas").value = data.rates.gas || 1.80;
+              $("#rateWater").value = data.rates.water || 0.008;
+            }
+            $("#projCost").value = data.projCost || 850000;
+            $("#cashInv").value = data.cashInv || 200000;
+
+          } else {
+            // Fallback inline guarded assignment
+            function assignWithEmptyGuard(fieldName, currentVarName) {
+              if (data[fieldName] !== undefined) {
+                if (Array.isArray(data[fieldName]) && data[fieldName].length === 0) {
+                  const proceed = confirm(`Imported JSON has an empty ${fieldName}. Importing will clear the current ${fieldName}. Proceed?`);
+                  if (proceed) {
+                    window[currentVarName] = data[fieldName];
+                  } else {
+                    console.warn(`Skipped importing empty ${fieldName}`);
+                  }
+                } else {
+                  window[currentVarName] = data[fieldName];
+                }
+              }
+            }
+
+            assignWithEmptyGuard('washerDefs', 'washerDefs');
+            assignWithEmptyGuard('dryerDefs', 'dryerDefs');
+            assignWithEmptyGuard('equipCosts', 'equipCosts');
+            $("#locale").value = data.locale || 'national_city';
+            $("#horizon").value = data.horizon || 10;
+            $("#days").value = data.days || 30;
+            if (data.rates) {
+              document.getElementById("rateElec").value = data.rates.elec || 0.32;
+              $("#rateGas").value = data.rates.gas || 1.80;
+              $("#rateWater").value = data.rates.water || 0.008;
+            }
+            $("#projCost").value = data.projCost || 850000;
+            $("#cashInv").value = data.cashInv || 200000;
           }
-          
-          $("#projCost").value = data.projCost || 850000;
-          $("#cashInv").value = data.cashInv || 200000;
-          
+
           populateEquipmentTables();
           populateEquipmentCostTable();
           compute();
-          
+
           alert('Data imported successfully!');
         } catch (err) {
           alert('Error importing file: ' + err.message);
