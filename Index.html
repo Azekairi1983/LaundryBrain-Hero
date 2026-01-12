@@ -2715,7 +2715,13 @@ function checkConstraintsEnhanced() {
   
   $("#accountantText").innerHTML = analysis;
   $("#healthMetrics").innerHTML = healthMetrics;
+
+  // Expose final recommendation and grade for other synthesis consumers (keeps Mr. Accountant consistent)
+  try {
+    window._accountantFinal = { recommendation: recommendation || '', finalGrade: finalGrade || '', analysis };
+  } catch (e) { /* noop in test environments */ }
 }
+
 
 // Main compute function
 
@@ -4359,12 +4365,17 @@ function buildAccountantSynthesis(hz, snapshot, simulation) {
   const instReject = hz.label === "ZERO";
   const dealKillers = hz.dealKillers || [];
 
-  // Final recommendation logic
-  let rec = "PROCEED";
-  if ((snapshot.ebitda ?? 0) <= 0 || margin < 0.12) rec = "REJECT";
-  if (lenderReject) rec = "REJECT OR RESTRUCTURE";
-  if (!lenderReject && instReject) rec = "REJECT AT CURRENT PRICE";
-  if (!lenderReject && hz.label === "BORDERLINE") rec = "RENEGOTIATE / RESTRUCTURE";
+  // Final recommendation logic - prefer the consolidated recommendation computed by renderAccountantAnalysis when available
+  const acctFinal = (typeof window !== 'undefined' && window._accountantFinal) ? window._accountantFinal : null;
+  let rec = acctFinal && acctFinal.recommendation ? acctFinal.recommendation : "PROCEED";
+
+  // Fallback checks if global summary not available
+  if (!acctFinal) {
+    if ((snapshot.ebitda ?? 0) <= 0 || margin < 0.12) rec = "REJECT";
+    if (lenderReject) rec = "REJECT OR RESTRUCTURE";
+    if (!lenderReject && instReject) rec = "REJECT AT CURRENT PRICE";
+    if (!lenderReject && hz.label === "BORDERLINE") rec = "RENEGOTIATE / RESTRUCTURE";
+  }
 
   // Narrative that explicitly references advisors
   lines.push(`Considering Mr. Lender: ${lenderReject ? "financeability is constrained." : "financing appears feasible under standard terms."}`);
